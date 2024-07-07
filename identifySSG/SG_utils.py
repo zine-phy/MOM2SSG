@@ -5,9 +5,6 @@ from small_func import *
 from PG_utils import sort_rot
 import pickle
 import os, sys
-path = '/storage1/home/yjiang/SpinSG/SSG_codes'
-sys.path.append(path)
-
 
 def identify_SG_lattice(gid):
     # identify Bravais lattice for a given sg, return: Brav_latt
@@ -180,13 +177,6 @@ def test1():
     tau_list = [np.zeros(3), np.zeros(3)]
     prim_latt = np.array([[1,0,1],[1.5,1.5,0],[0,0,3]])
     identify_SG_from_cell(rotP_list, tau_list, prim_latt)
-
-
-
-
-
-if __name__ == '__main__':
-    SG_subPG_data = np.load("%s/data/SG_subPG_data.npy"%path,allow_pickle=True)
 
 
 

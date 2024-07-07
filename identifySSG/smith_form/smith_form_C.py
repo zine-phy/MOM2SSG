@@ -3,6 +3,7 @@ from os import path
 from ctypes import CDLL, c_int, POINTER
 from numpy.ctypeslib import ndpointer 
 import numpy as np
+import os
 # import sage.all as sage 
 
 # ============================================================================= 
@@ -10,8 +11,14 @@ import numpy as np
 # Load integer linear algebra library 
 #
 # =============================================================================
-# _dll=CDLL(path.split(path.realpath(argv[0]))[0]+'/libintlng.so')
-_dll=CDLL('/storage1/home/zysong/SSG/identifySSG/smith_form/libintlng.so')
+#
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
+
+so_file_path = os.path.join(script_dir, 'libintlng.so')
+
+_dll=CDLL(so_file_path)
+
 
 _smith_form = _dll.smith_form_interface
 _smith_form.argtypes = [c_int,c_int,POINTER(c_int),\

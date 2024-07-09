@@ -7,7 +7,7 @@ This Python program can be used to identify the Spin-Space Group (SSG) of a magn
 1. **Clone the repository:**
 
     ```bash
-    git clone [<repository_url>](https://github.com/zine-phy/MOM2SSG.git)
+    git clone https://github.com/zine-phy/MOM2SSG.git
     ```
 
 2. **Extract the data in `ssg_data`:**

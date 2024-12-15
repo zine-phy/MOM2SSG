@@ -1,7 +1,7 @@
 import numpy as np
 from math import cos, sin, acos, asin, pi, sqrt
 from numpy.linalg import inv, norm
-from small_func import round_vec
+from .small_func import round_vec
 
 #SGdata = np.load("data/type1sg_ops.npy", allow_pickle=True)
 PG_list = ['1', '-1', '2', 'm', '2/m', '222', 'mm2', 'mmm', '4', '-4', '4/m', '422', '4mm', '-42m', '4/mmm',

@@ -5,17 +5,17 @@ import pickle
 import os, sys
 from itertools import permutations
 import sympy as sp
-from small_func import *
-from PG_utils import sort_rot, identify_PG_from_gid
-from SG_utils import identify_SG_lattice
+from .small_func import *
+from .PG_utils import sort_rot, identify_PG_from_gid
+from .SG_utils import identify_SG_lattice
 # from sim_trans import find_similarity_transformation, rep_similarity_transformation
 from time import time
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
 
-data1_path = os.path.join(script_dir, '../ssg_data/type1sg_ops.npy')
-data2_path = os.path.join(script_dir, '../ssg_data/SG_subPG_data.npy')
+data1_path = os.path.join(script_dir, 'ssg_data/type1sg_ops.npy')
+data2_path = os.path.join(script_dir, 'ssg_data/SG_subPG_data.npy')
 
 SG_data = np.load(data1_path, allow_pickle=True)
 SG_subPG_data = np.load(data2_path, allow_pickle=True)

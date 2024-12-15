@@ -1,8 +1,8 @@
 import numpy as np
 from numpy.linalg import norm, inv, eigh, det
 import spglib
-from small_func import *
-from PG_utils import sort_rot
+from .small_func import *
+from .PG_utils import sort_rot
 import pickle
 import os, sys
 

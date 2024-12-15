@@ -10,10 +10,10 @@ from pymatgen.io.cif import CifParser
 from collections import OrderedDict
 from math import cos, sin, acos, asin, pi, sqrt, tan
 
-from small_func import *
-from PG_utils import sort_rot
-from SG_utils import identify_SG_lattice
-from SG_isomorphism import find_sg_iso_transform
+from .small_func import *
+from .PG_utils import sort_rot
+from .SG_utils import identify_SG_lattice
+from .SG_isomorphism import find_sg_iso_transform
 
 def unique_list(list1):
  
@@ -204,6 +204,7 @@ def read_poscar(file_name = 'POSCAR'): #read the POSCAR to get the cell
     lattice  = np.zeros((3, 3))
     deg_of_points = []
     numbers = []
+    mag = []
     # file_name = 'POSCAR_test'
     with open(file_name, 'r') as f:
         f_lines = f.readlines()
@@ -225,18 +226,26 @@ def read_poscar(file_name = 'POSCAR'): #read the POSCAR to get the cell
                 positions = np.zeros((num_of_points, 3))
             if cnt > 7 and cnt < (7 + num_of_points + 1):
                 line = line.strip().split()
-                positions[cnt-8, :] = [float(c) for c in line]
-    return (lattice, positions, numbers) 
+                if len(line) == 3:
+                    positions[cnt-8, :] = [float(c) for c in line]
+                    mag.append([0, 0, 0])
+                elif len(line) == 6:
+                    positions[cnt-8, :] = [float(c) for c in line[:3]]
+                    mag.append([float(c) for c in line[3:]])
+                else:
+                    # print('line', cnt+1 ,'not valid POSCAR input !!!')
+                    raise ValueError('Invalid input, please check POSCAR line ' + str(cnt+1) )
+        cell = (lattice, positions, numbers, np.array(mag)) 
+    return cell
 
-
-def get_cell(file, mag):
-    cell = read_poscar(file)
-    # dataset = get_symmetry_dataset(cell)
-    # print(dataset['number'])
-    # mag = np.array([[1.5, 2.598, 0], [-3, 0, 0], [-3, 0, 0], [1.5, 2.598, 0], [1.5, -2.598, 0], [1.5, -2.598, 0], [0 ,0, 0], [0, 0, 0]])
-    [lattice, positions, numbers] = [cell[0], cell[1], cell[2]]
-    cell_mag = (lattice, positions, numbers, mag)
-    return cell_mag
+# def get_cell(file, mag):
+#     cell = read_poscar(file)
+#     # dataset = get_symmetry_dataset(cell)
+#     # print(dataset['number'])
+#     # mag = np.array([[1.5, 2.598, 0], [-3, 0, 0], [-3, 0, 0], [1.5, 2.598, 0], [1.5, -2.598, 0], [1.5, -2.598, 0], [0 ,0, 0], [0, 0, 0]])
+#     [lattice, positions, numbers] = [cell[0], cell[1], cell[2]]
+#     cell_mag = (lattice, positions, numbers, mag)
+#     return cell_mag
 
 def identity_vec(v1 ,v2, tol = 1e-4):
     diff = np.linalg.norm(v1 - v2)
@@ -1081,43 +1090,68 @@ def print_tau(mat, wfile=None, print1=True):
         return strg
 
 def main():
-    if os.path.exists('INCAR.mag') and os.path.exists('POSCAR'):
-        mag = read_magmom('INCAR.mag')
+    warnings.filterwarnings('ignore')
+    if os.path.exists('POSCAR'):
+        
         script_dir = os.path.dirname(os.path.abspath(__file__))
 
 
-        pkl_file_path = os.path.join(script_dir, '../ssg_data/identify.pkl')
+        pkl_file_path = os.path.join(script_dir, 'ssg_data/identify.pkl')
         file = pkl_file_path
         with open(file, 'rb') as f:
             ssg_list = pickle.load(f)
 
-        cell = get_cell('POSCAR', mag)
+        cell = read_poscar('POSCAR')
 
-        print('Reading POSCAR and INCAR.mag as input ......')
+        print('Reading POSCAR as input ......')
     elif os.path.exists('identifySSG.mcif'):
         cell = mcif2cell('identifySSG.mcif')
         print('Reading mcif as input......')
     
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        pkl_file_path = os.path.join(script_dir, 'ssg_data/identify.pkl')
+        file = pkl_file_path
+        with open(file, 'rb') as f:
+            ssg_list = pickle.load(f)
     else:
-        print('Have no input files !!!')
-        ValueError('cant read input file')
-    operations = findAllOp(cell, tol = 1e-4)
-    print('Operations:')
-    print('spin rotations:')
-    print_matlist(operations['spin'])
-    print('==================')
-    print('space rotations:')
-    print_matlist(operations['RotC'])
-    print('==================')
-    print('translations:')
-    print_taulist(operations['TauC'])
-    print('==================')
-    # print(operations)
-    ssgnum = search4ssg(cell, ssg_list, tol = 1e-4)
-    print('The SSG number:')
-    print(ssgnum)
-    print('More information about this group can be found at')
-    print('https://cmpdc.iphy.ac.cn/ssg/ssgs/'+ssgnum)
+        # print('Have no input files !!!')
+        raise ValueError('cant find input file!!! use POSCAR or identifySSG.mcif as input')
+    
+    lattice = cell[0].copy()
+    position = cell[1].copy()
+    numbers = cell[2].copy()
+    mag = cell[3].copy()
+    if all(norm(m1) < 1e-4 for m1 in mag):
+        print('It is a non-magnetic structure')
+        cell_nonmag = (lattice, position, numbers)
+        nonmag_sym = get_symmetry_dataset(cell_nonmag)
+        print('Operations:')
+        print('space rotations:')
+        print_matlist(nonmag_sym['rotations'])
+        print('==================')
+        print('translations:')
+        print_taulist(nonmag_sym['translations'])
+        print('==================')
+        # print(operations)
+        print('The SG number:',nonmag_sym['number'],'(',nonmag_sym['international'],')')
+    else:
+        operations = findAllOp(cell, tol = 1e-4)
+        print('Operations:')
+        print('spin rotations:')
+        print_matlist(operations['spin'])
+        print('==================')
+        print('space rotations:')
+        print_matlist(operations['RotC'])
+        print('==================')
+        print('translations:')
+        print_taulist(operations['TauC'])
+        print('==================')
+        # print(operations)
+        ssgnum = search4ssg(cell, ssg_list, tol = 1e-4)
+        print('The SSG number:')
+        print(ssgnum)
+        print('More information about this group can be found at')
+        print('https://cmpdc.iphy.ac.cn/ssg/ssgs/'+ssgnum)
 
 
 

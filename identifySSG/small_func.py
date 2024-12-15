@@ -3,7 +3,7 @@ from numpy.linalg import norm, inv, eigh, det
 from itertools import product
 # from smith_form.gauss_elim import gauss_elim_np
 # from find_minimal_latt import standardize_prim_basis
-from smith_form.smith_form_C import smith_form
+from .smith_form.smith_form_C import smith_form
 import sympy as sp
 
 

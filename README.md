@@ -34,11 +34,34 @@ This Python program can be used to identify the Spin-Space Group (SSG) of a magn
 
 You can use `identifySSG` to identify the SSG of a magnetic structure. There are two ways to input the magnetic structure:
 
-1. **Using `POSCAR` and `INCAR.mag` files:**
+1. **Using `POSCAR` files:**  
 
-    - `POSCAR` should follow the same format as the VASP input file.
-    - `INCAR.mag` should provide the magnetic moments of the magnetic material.
+    - The `POSCAR` file should follow the same format as the VASP input file, with an extension for magnetic moments.  
+    - For magnetic atoms, each line in the atomic position section should include coordinates \((x_1, x_2, x_3)\) in direct (fractional) format, followed by the Cartesian magnetic moment components \((m_1, m_2, m_3)\).  
+    - For non-magnetic atoms, you only need to provide the atomic coordinates without specifying the magnetic moment.  
 
+    Example: Check the `example/` directory for a sample `POSCAR` file of \ch{Mn3Sn}. 
 2. **Using an `mcif` file:**
 
     - Name the file `identifySSG.mcif`.
+
+## References
+
+This program relies on the following libraries and data sources:
+
+1. **Spglib:**  
+   Used for symmetry analysis.  
+   > Togo, A., Shinohara, K., & Tanaka, I. (2024). *Spglib: a software library for crystal symmetry search*. *Sci. Technol. Adv. Mater., Meth.*, 4(1), 2384822–2384836. DOI: [10.1080/27660400.2024.2384822](https://doi.org/10.1080/27660400.2024.2384822).
+
+2. **Pymatgen:**  
+   Used for materials analysis and point group operations.  
+   > Brown, P. J., Nunez, V., Tasset, F., Forsyth, J. B., & Radhakrishna, P. (1990). *Determination of the magnetic structure of Mn3Sn using generalized neutron polarization analysis*. *Computational Materials Science*, 2(47), 9409. DOI: [10.1088/0953-8984/2/47/015](https://dx.doi.org/10.1088/0953-8984/2/47/015).
+
+3. **SSG Data Source:**  
+   The spin-space group (SSG) data used in this program is based on the following work:  
+   > Jiang, Y., Song, Z., Zhu, T., Fang, Z., Weng, H., Liu, Z.-X., Yang, J., & Fang, C. (2024). *Enumeration of Spin-Space Groups: Toward a Complete Description of Symmetries of Magnetic Orders*. *Phys. Rev. X, 14*(3), 031039. DOI: [10.1103/PhysRevX.14.031039](https://link.aps.org/doi/10.1103/PhysRevX.14.031039).
+
+## License
+
+This project is licensed under the terms of the [MIT License](LICENSE).  
+You are free to use, modify, and distribute this software in compliance with the license terms.

@@ -45,6 +45,13 @@ You can use `identifySSG` to identify the SSG of a magnetic structure. There are
 
     - Name the file `identifySSG.mcif`.
 
+
+## Notes on Space Group Settings
+
+In the enumeration of SSGs, space groups are defined based on their ITA (International Tables for Crystallography) numbers. For instance, space group No. 62 is defined in its standard ITA setting as **Pnma**. Alternative settings like **Pmnb** are treated equivalently. 
+
+
+
 ## References
 
 This program relies on the following libraries and data sources:

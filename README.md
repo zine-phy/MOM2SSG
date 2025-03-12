@@ -45,6 +45,9 @@ You can use `identifySSG` to identify the SSG of a magnetic structure. There are
 
     - Name the file `identifySSG.mcif`.
 
+In the `example/` directory, we provide both a `POSCAR` file and an `mcif` file for \ch{Mn3Sn}. The `mcif` file is directly downloaded from [MAGNDATA](https://www.cryst.ehu.es/magndata/index.php?index=0.199). Users can run `identifySSG` in either the `mcif/` or `POSCAR/` folder, and both methods will yield the same SSG result: **194.1.6.1.P**.
+
+
 
 ## Notes on Space Group Settings
 

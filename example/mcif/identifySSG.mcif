@@ -84,6 +84,13 @@ loop_
 _space_group_symop_magn_operation.id
 _space_group_symop_magn_operation.xyz
 1 x,y,z,+1
+2 -x,-x+y,-z,+1
+3 -x,-y,-z,+1
+4 x,x-y,z,+1
+5 x,x-y,-z+1/2,-1
+6 -x,-y,z+1/2,-1
+7 -x,-x+y,z+1/2,-1
+8 x,y,-z+1/2,-1
 
 loop_
 _space_group_symop_magn_centering.id
@@ -96,27 +103,16 @@ _atom_site_type_symbol
 _atom_site_fract_x
 _atom_site_fract_y
 _atom_site_fract_z
-Mn1 Mn 0.838799521 0.677599042 0.250000000
-Mn2 Mn 0.161200479 0.838799521 0.750000000
-Mn3 Mn 0.838799521 0.161200479 0.250000000
-Mn4 Mn 0.161200479 0.322400958 0.750000000
-Mn5 Mn 0.322400958 0.161200479 0.250000000
-Mn6 Mn 0.677599042 0.838799521 0.750000000
-Sn1 Sn 0.333333333 0.666666667 0.250000000
-Sn2 Sn 0.666666667 0.333333333 0.750000000
-
+Mn1_1 Mn 0.83880 0.67760 0.25000
+Mn1_2 Mn  0.32240 0.16120 0.25000
+Sn1 Sn 0.333333 0.666667 0.25000
 
 loop_
 _atom_site_moment.label
 _atom_site_moment.crystalaxis_x
 _atom_site_moment.crystalaxis_y
 _atom_site_moment.crystalaxis_z
-Mn1 3 0 0
-Mn2 0 3 0
-Mn3 -3 -3 0
-Mn4 3 0 0
-Mn5 0 3 0
-Mn6 -3 -3 0
-
-
+_atom_site_moment.symmform
+Mn1_1 3.00(1) 3.00 0.00000 mx,my,0
+Mn1_2 0.00000 -3.00 0.00000 0,my,0
 

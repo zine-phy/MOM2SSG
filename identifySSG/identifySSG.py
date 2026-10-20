@@ -9,6 +9,7 @@ import warnings
 from pymatgen.io.cif import CifParser
 from collections import OrderedDict
 from math import cos, sin, acos, asin, pi, sqrt, tan
+from itertools import product
 
 from .small_func import *
 from .PG_utils import sort_rot
@@ -28,20 +29,22 @@ def unique_list(list1):
     return unique_list
 
 def change_tau(tau):
-    tau_new = [(round(tau[0]*100)/100)%1, (round(tau[1]*100)/100)%1, (round(tau[2]*100)/100)%1]
-    return np.array(tau_new) 
+    """Return a fractional translation without rounding away rational offsets."""
+    return np.mod(np.asarray(tau, dtype=float), 1.0)
 
-def sort_array(target): # sort a 2d array
-    size_1 = np.size(target, 0)
-    size_2 = np.size(target, 1)
-    for m in range(size_1):
-        for n in range(size_2):
-            target[m, n] = round(target[m, n]*1e+5)/ 1e+5
-    sort_list = list()
-    sort_list = target.tolist()
-    sort_list.sort()
-    target_after_sort = np.array(sort_list)
-    return target_after_sort
+
+def same_translation_mod_lattice(tau1, tau2, tol=1e-4):
+    """Compare translations on the 3-torus, including values near 0 and 1."""
+    diff = np.asarray(tau1) - np.asarray(tau2)
+    return norm(diff - np.rint(diff)) < tol
+
+def sort_array(target):
+    """Sort position/moment rows using position keys, preserving moment precision."""
+    target = np.asarray(target).copy()
+    # Retain the existing coordinate quantization; it must not quantize moments.
+    target[:, :3] = np.round(target[:, :3], 5)
+    order = np.lexsort((target[:, 2], target[:, 1], target[:, 0]))
+    return target[order]
 
 def generate_coord(rot_list, tau_list):
     # generate coord list using {rot|tau}, starting from a given generic position
@@ -254,7 +257,7 @@ def identity_vec(v1 ,v2, tol = 1e-4):
     else:
         return False
 
-def findH(cell, tol): # find the pure lattice space group number
+def findH(cell, tol, mag_tol=1e-4): # find the pure lattice space group number
     lattice = cell[0].copy()
     position = cell[1].copy()
     numbers = cell[2].copy()
@@ -277,7 +280,7 @@ def findH(cell, tol): # find the pure lattice space group number
         else:
             num_bascket = np.size(numbers_bascket)
             for i in range(num_bascket):
-                if numbers[at] == numbers_bascket[i] and identity_vec(mag[at], mag_bascket[i]):
+                if numbers[at] == numbers_bascket[i] and identity_vec(mag[at], mag_bascket[i], mag_tol):
                     num_need = num_list[i]
                     new_numbers.append(num_need)
                     flag = False
@@ -318,8 +321,13 @@ def findG(cell, tol): # non-magnetic spacce group, return the list of rotations 
     Gtran = Gop['translations']
     return [Gnum, Grot, Gtran]
 
-def findQ(cell): # find the largest possilbel PG of the quotient group , get all the operations
-    dim = findDimension(cell)
+def findQ(cell, mag_tol=1e-4): # largest possible spin point group
+    dim = findDimension(cell, mag_tol)
+    if dim == 1:
+        # Representatives modulo the continuous spin-only stabilizer.
+        return [np.eye(3), -np.eye(3)]
+    if dim == 0:
+        raise ValueError('Nonmagnetic structure: use the ordinary space group')
     # if dim == 0:
     #     return '1'
     # if dim == 1:
@@ -330,7 +338,7 @@ def findQ(cell): # find the largest possilbel PG of the quotient group , get all
     coord = []
     num = np.size(numbers, 0)
     for at in range(num):
-        if not identity_vec(mag[at], [0, 0, 0]):
+        if not identity_vec(mag[at], [0, 0, 0], mag_tol):
             coord.append(mag[at])
     # append [0, 0, 0] to the mass center
     coord.append(np.array([0, 0, 0]))
@@ -344,7 +352,7 @@ def findQ(cell): # find the largest possilbel PG of the quotient group , get all
     #     elements.append(num2ele[num])
     mol = Molecule(elements, coord)
     # print(elements, coord)
-    point_group = PointGroupAnalyzer(mol, tolerance=1e-4, eigen_tolerance=0.0001, matrix_tolerance=0.00001)
+    point_group = PointGroupAnalyzer(mol, tolerance=mag_tol, eigen_tolerance=0.0001, matrix_tolerance=0.00001)
     # print('posible Q')
     # print(point_group.sch_symbol)
     op = point_group.get_symmetry_operations()
@@ -353,16 +361,45 @@ def findQ(cell): # find the largest possilbel PG of the quotient group , get all
         op_list.append(i.rotation_matrix) # rotation operation list
     label = point_group.sch_symbol
     # print(op_list)
-    E3 = np.eye(3)
-    if dim == 2 or 3: #FIXME
-        return op_list
-    else:
-        return [E3, -E3]
+    return op_list
         
-def findDimension(cell): # collinear or coplanar or no-coplanar, return 3, 2, 1
-    mag = cell[3].copy()
-    rank = np.linalg.matrix_rank(mag)
-    return rank
+def _positive_tolerance(value, name):
+    value = float(value)
+    if not np.isfinite(value) or value <= 0:
+        raise ValueError(f'{name} must be finite and positive')
+    return value
+
+
+def findDimension(cell, mag_tol=1e-4, return_details=False):
+    """Resolve magnetic dimension using an absolute per-atom moment tolerance.
+
+    For a line or plane, require every residual from the SVD subspace to be
+    below mag_tol / 2. Reflection of that residual then costs at most mag_tol,
+    consistent with the operation check. No input moment is rounded/projected.
+    Unlike a singular-value cutoff this criterion does not grow with atom count.
+    """
+    mag_tol = _positive_tolerance(mag_tol, 'mag_tol')
+    mag = np.asarray(cell[3], dtype=float)
+    if mag.ndim != 2 or mag.shape[1] != 3 or not len(mag) or not np.isfinite(mag).all():
+        raise ValueError('magnetic moments must be a nonempty finite (N, 3) array')
+    _, singular_values, axes = np.linalg.svd(mag, full_matrices=False)
+    residuals = [float(np.max(norm(mag, axis=1)))]
+    for rank in (1, 2):
+        basis = axes[:rank]
+        residuals.append(float(np.max(norm(mag - (mag @ basis.T) @ basis, axis=1))))
+    if residuals[0] < mag_tol:
+        dimension = 0
+    elif residuals[1] < mag_tol / 2:
+        dimension = 1
+    elif residuals[2] < mag_tol / 2:
+        dimension = 2
+    else:
+        dimension = 3
+    details = dict(dimension=dimension, mag_tol=mag_tol,
+                   subspace_tolerance=mag_tol / 2,
+                   singular_values=singular_values.tolist(),
+                   max_residual_by_rank=residuals)
+    return details if return_details else dimension
 
 def mcif2cell(file_name):
     cc = CifParser(file_name)
@@ -383,149 +420,294 @@ def mcif2cell(file_name):
     cell = (lattice, position, numbers, mag)
     return cell
 
-def search4ssg(cell, ssg_list, tol = 1e-4):
-    ssg_dict = findAllOp(cell, tol)
-    # print(ssg_dict)
-    search = str(ssg_dict['Gnum']) + '.' + str(ssg_dict['Ik']) + '.' + str(ssg_dict['It'])
-    eqvPg = ssg_dict['QLabel']
-    dim = findDimension(cell)
-    H = ssg_dict['Hnum']
-    ssg_maybe = []
-    # print(search, H, dim, eqvPg)
-    flag_maybe = True
-    for s in ssg_list:
-        if s['dim'] == dim and s['search'] == search:
-            if s['Hid'] == int(H) and s['eqvPg'] == str(eqvPg):
-                ssg_maybe.append(s)
-                flag_maybe = False
-    if flag_maybe:
-        ssg_dict = findAllOp_v2(cell, tol)
-        # print(ssg_dict)
-        search = str(ssg_dict['Gnum']) + '.' + str(ssg_dict['Ik']) + '.' + str(ssg_dict['It'])
-        eqvPg = ssg_dict['QLabel']
-        dim = findDimension(cell)
-        H = ssg_dict['Hnum']
-        ssg_maybe = []
-        # print(search, H, dim, eqvPg)
-        for s in ssg_list:
-            if s['dim'] == dim and s['search'] == search:
-                if s['Hid'] == int(H) and s['eqvPg'] == str(eqvPg):
-                    ssg_maybe.append(s)
-    
-    # print(search, H, dim, eqvPg)
-    # print(len(ssg_maybe))
-    if len(ssg_maybe) == 1:
-        return ssg_maybe[0]['ssgNum']
-    ssg_q = []
-    out = []
-    transform = ssg_dict['transformation_matrix']
-    shift = ssg_dict['original_shift']
-    Gnum = ssg_dict['Gnum']
-    # trans_list = [ssg_dict['transformation_matrix']]
-    # if int(ssg_dict['Ik']) == 1:
-    #     shift_list = [shift]
-    # else:
-    #     shift_list = []
-    #     n = 6
-    #     for i in range(n):
-    #         for m in range(n):
-    #             for l in range(n):
-    #                 shift_list.append(np.array([i/n, m/n, l/n]))
-    # for ss in ssg_maybe:
-    #     flag_s1 = True
-    #     if flag_s1:
-    #         for sh in shift_list:
-    #             checkq = checkQ(ss,ssg_dict, dim, sh, transform)
-    #             checkh = checkH(ss,ssg_dict, sh, transform)
-    #             # print(ss['ssgNum'],'Q and H',checkq,checkh)
-    #             if checkq and checkh:
-    #                 flag_s1 = False
-    #                 ssg_q.append(ss['ssgNum'])
-    #                 out.append(ss)
-    # ssg_q = unique_list(ssg_q)
-    # if len(ssg_q) == 1:
-    #     return ssg_q[0]
-    # loop the trans:
-    shift_list = [shift]
-    G_p = identify_PG_from_gid(Gnum)
-    trans_dict = find_sg_iso_transform(Gnum)
-    w_iso_list = trans_dict['iso_rot']
-    print(w_iso_list)
-    shift_iso_list = trans_dict['iso_tau']
-    print(shift_iso_list)
-    transformation = ssg_dict['transformation_matrix']
-    shift = ssg_dict['original_shift']
-    print(shift)
-    print(len(ssg_maybe))
-    for ss in ssg_maybe:
-        flag_s1 = True
-        if flag_s1:
-            for cnt, w_iso in enumerate(w_iso_list):
-                transform = w_iso @ transformation
-                tau_iso_list = shift_iso_list[cnt]
-                for sh in shift_list:
-                    if flag_s1:
-                    # print(transform,sh)
-                        checkq = checkQ(ss,ssg_dict, dim, sh, transform)
-                        checkh = checkH(ss,ssg_dict, sh, transform)
-                        # print(ss['ssgNum'],'Q and H',checkq,checkh)
-                        if checkq and checkh:
-                            print(transform,sh)
-                            flag_s1 = False
-                            ssg_q.append(ss['ssgNum'])
-                            out.append(ss)
-    ssg_q = unique_list(ssg_q)
-    print(len(ssg_q))
-    if len(ssg_q) == 1:
-        return ssg_q[0]
-
-    # if len(ssg_q) > 1:
-    #     return ssg_q
-    # # loop the shift:
-    # shift = ssg_dict['original_shift']
-    # shift_list = [shift]
-    # for m in range(16):
-    #     for n in range(16):
-    #         for l in range(16):
-    #             shift_list.append(np.array([-1 + m/8, -1 + n/8, -1+l/8]))
-    # ssg_q = []
-    # for ss in ssg_maybe:
-    #     flag_s1 = True
-    #     if flag_s1:
-    #         for sh in shift_list:
-    #             checkq = checkQ(ss,ssg_dict, dim, sh, transform)
-    #             checkh = checkH(ss,ssg_dict, sh, transform)
-    #             # print(ss['ssgNum'],'Q and H',checkq,checkh)
-    #             if checkq and checkh:
-    #                 flag_s1 = False
-    #                 ssg_q.append(ss['ssgNum'])
-    #                 out.append(ss)
-    # ssg_q = unique_list(ssg_q)
-    # if len(ssg_q) == 1:
-    #     return ssg_q[0]
-    # #loop the transform:
-    # ssg_q = []
-    # for ss in ssg_maybe:
-    #     flag_iso = True
-    #     for shift in shift_list:
-    #         for transform in trans_list:
-    #         # for ss in ssg_maybe:
-    #             if flag_iso:
-    #                 checkq = checkQ(ss,ssg_dict, dim, shift, transform)
-    #                 checkh = checkH(ss,ssg_dict, shift, transform)
-    #                 # print(ss['ssgNum'],'Q and H',checkq,checkh)
-    #                 if checkq and checkh:
-    #                     flag_iso = False
-    #                     # print(transform, shift)
-    #                     ssg_q.append(ss['ssgNum'])
-    #                     out.append(ss)
-    # if len(ssg_q) == 1:
-    #     return ssg_q[0]
-    return 'need more loop'
+def _ssg_candidates(ssg_list, operations, dim):
+    """Apply the database's coarse invariants before comparing operations."""
+    search = f"{operations['Gnum']}.{operations['Ik']}.{operations['It']}"
+    return [
+        record for record in ssg_list
+        if record['dim'] == dim
+        and record['search'] == search
+        and record['Hid'] == int(operations['Hnum'])
+        and record['eqvPg'] == str(operations['QLabel'])
+    ]
 
 
-    
-def identity_cell(cell1, cell2): 
+def _affine_key(rotation, shift):
+    """Deduplicate an exact affine setting.
+
+    A primitive translation of G can act differently on G/H when H has a
+    supercell, so integer shifts cannot be reduced modulo the G lattice here.
+    """
+    rotation_key = tuple(np.rint(np.asarray(rotation).ravel() * 1e7).astype(int))
+    shift_key = tuple(np.rint(np.asarray(shift) * 1e7).astype(int))
+    return rotation_key, shift_key
+
+
+def _automorphism_transforms(operations, iso_data, offsets):
+    """Compose material-to-standard setting with each automorphism of G.
+
+    If x_std = P x_material + p and the automorphism is x' = A x_std + a,
+    the combined setting is x' = (A P) x_material + (A p + a).
+    """
+    base_rotation = np.asarray(operations['transformation_matrix'])
+    base_shift = np.asarray(operations['original_shift'])
+    identity = (np.eye(3), [np.zeros(3)])
+    automorphisms = [identity] + list(zip(iso_data['iso_rot'], iso_data['iso_tau']))
+    for offset in offsets:
+        shifted_origin = base_shift + np.asarray(offset)
+        for rotation, shifts in automorphisms:
+            for shift in shifts:
+                yield rotation @ base_rotation, rotation @ shifted_origin + shift
+
+
+def _quarter_origin_offsets():
+    """Finite extra origin shifts used in the paper's identification procedure."""
+    for i, j, k in product(range(4), repeat=3):
+        if i or j or k:
+            yield np.array([i, j, k], dtype=float) / 4
+
+
+def _translation_cosets(candidate, gid):
+    """Represent T_G / T_H in the conventional coordinates of G."""
+    supercell = np.rint(np.asarray(candidate['superCell'])).astype(int)
+    index = round(abs(np.linalg.det(supercell)))
+    if index == 1:
+        return [np.zeros(3)]
+    inverse = np.linalg.inv(supercell)
+    representatives = []
+    for coordinates in product(range(index), repeat=3):
+        vector = np.asarray(coordinates, dtype=int)
+        if any(np.allclose(inverse @ (vector - previous),
+                           np.rint(inverse @ (vector - previous)), atol=1e-8)
+               for previous in representatives):
+            continue
+        representatives.append(vector)
+        if len(representatives) == index:
+            break
+    if len(representatives) != index:
+        raise ValueError(f'Could not enumerate translation cosets for {candidate["ssgNum"]}')
+    primitive_basis = identify_SG_lattice(gid)[1]
+    return [primitive_basis @ vector for vector in representatives]
+
+
+def _triclinic_index_two_setting(candidate, operations):
+    """Map an index-two H translation lattice for G=P-1 using GL(3,Z).
+
+    Such sublattices are kernels of a nonzero parity character on Z^3.
+    Construct a unimodular matrix by elementary column operations instead
+    of enumerating the infinite affine normalizer of P-1.
+    """
+    if operations['Gnum'] != 2 or operations['Ik'] != 2:
+        return None
+
+    def parity_normal(generators):
+        rounded = np.rint(generators)
+        if not np.allclose(generators, rounded, atol=1e-5):
+            return None
+        vectors = rounded.astype(int)
+        normals = [np.asarray(bits, dtype=int)
+                   for bits in product((0, 1), repeat=3)
+                   if any(bits) and all(np.dot(bits, v) % 2 == 0 for v in vectors)]
+        return normals[0] if len(normals) == 1 else None
+
+    P = np.asarray(operations['transformation_matrix'])
+    material_generators = [P[:, i] for i in range(3)]
+    material_generators += [P @ np.asarray(t) for r, t in
+                            zip(operations['HRotC'], operations['HTauC'])
+                            if norm(np.asarray(r) - np.eye(3)) < 1e-5]
+    material_normal = parity_normal(np.asarray(material_generators))
+    database_normal = parity_normal(np.asarray(candidate['superCell']).T)
+    if material_normal is None or database_normal is None:
+        return None
+
+    A = np.eye(3, dtype=int)
+    row = database_normal.copy()
+
+    def swap_columns(i, j):
+        nonlocal A, row
+        elementary = np.eye(3, dtype=int)
+        elementary[:, [i, j]] = elementary[:, [j, i]]
+        A = A @ elementary
+        row = (row @ elementary) % 2
+
+    def add_column(source, target):
+        nonlocal A, row
+        elementary = np.eye(3, dtype=int)
+        elementary[source, target] = 1
+        A = A @ elementary
+        row = (row @ elementary) % 2
+
+    pivot = int(np.flatnonzero(row)[0])
+    swap_columns(0, pivot)
+    for j in (1, 2):
+        if row[j]:
+            add_column(0, j)
+    pivot = int(np.flatnonzero(material_normal)[0])
+    swap_columns(0, pivot)
+    for j in range(3):
+        if j != pivot and material_normal[j]:
+            add_column(pivot, j)
+    assert np.array_equal(row, material_normal)
+    return A
+
+
+def search4ssg(cell, ssg_list, tol=1e-4, operations=None, return_details=False,
+               *, mag_tol=1e-4, translation_tol=1e-4, rotation_tol=1e-3, spin_tol=1e-2):
+    """Match found operations to one SSG database number.
+
+    ``operations`` lets callers reuse the first-stage result instead of
+    repeating the expensive operation search. ``return_details`` exposes the
+    matching stage and counts for debugging while the default keeps the
+    original string return type.
+    """
+    tol = _positive_tolerance(tol, 'tol')
+    mag_tol = _positive_tolerance(mag_tol, 'mag_tol')
+    translation_tol = _positive_tolerance(translation_tol, 'translation_tol')
+    rotation_tol = _positive_tolerance(rotation_tol, 'rotation_tol')
+    spin_tol = _positive_tolerance(spin_tol, 'spin_tol')
+    dimension_details = findDimension(cell, mag_tol, return_details=True)
+    dim = dimension_details['dimension']
+    if dim == 0:
+        raise ValueError('Nonmagnetic structure: use the ordinary space group')
+    if operations is not None:
+        for key, expected in (('mag_tol', mag_tol), ('symprec', tol), ('dimension', dim)):
+            if key in operations and operations[key] != expected:
+                raise ValueError(f'Provided operations have different {key}; recompute with matching tolerances')
+    operations = operations if operations is not None else findAllOp(cell, tol, mag_tol)
+    candidates = _ssg_candidates(ssg_list, operations, dim)
+    used_fallback = False
+    if not candidates:
+        operations = findAllOp_v2(cell, tol, mag_tol)
+        candidates = _ssg_candidates(ssg_list, operations, dim)
+        used_fallback = True
+
+    details = {
+        'dimension_details': dimension_details,
+        'tolerances': dict(symprec=tol, mag_tol=mag_tol, translation_tol=translation_tol,
+                           rotation_tol=rotation_tol, spin_tol=spin_tol),
+        'Gnum': operations['Gnum'],
+        'Hnum': operations['Hnum'],
+        'Ik': operations['Ik'],
+        'It': operations['It'],
+        'QLabel': operations['QLabel'],
+        'candidate_numbers': [record['ssgNum'] for record in candidates],
+        'used_fallback_operations': used_fallback,
+        'transforms_tested': 0,
+        'h_matches': 0,
+        'q_matches': 0,
+    }
+
+    def finish(status, numbers=(), stage=None):
+        details['status'] = status
+        details['matching_numbers'] = sorted(numbers)
+        details['stage'] = stage
+        details['number'] = next(iter(numbers)) if status == 'matched' else None
+        if return_details:
+            return details
+        return details['number'] if status == 'matched' else 'need more loop'
+
+    if not candidates:
+        return finish('no_candidates')
+
+    seen = set()
+
+    def try_transforms(transforms, stage):
+        matches = set()
+        for transform, shift in transforms:
+            key = _affine_key(transform, shift)
+            if key in seen:
+                continue
+            seen.add(key)
+            details['transforms_tested'] += 1
+            for candidate in candidates:
+                number = candidate['ssgNum']
+                if number in matches:
+                    continue
+                if not checkH(candidate, operations, shift, transform, translation_tol, rotation_tol):
+                    continue
+                details['h_matches'] += 1
+                if checkQ(candidate, operations, dim, shift, transform, translation_tol, rotation_tol, spin_tol):
+                    details['q_matches'] += 1
+                    matches.add(number)
+            if len(matches) > 1:
+                return finish('ambiguous', matches, stage)
+        if len(matches) == 1:
+            return finish('matched', matches, stage)
+        return None
+
+    base_rotation = np.asarray(operations['transformation_matrix'])
+    base_shift = np.asarray(operations['original_shift'])
+    result = try_transforms([(base_rotation, base_shift)], 'spglib')
+    if result is not None:
+        return result
+
+    # Cheap origin shifts should precede the potentially unbounded GL(3, Z)
+    # automorphism search for triclinic and monoclinic space groups.
+    lattice_shifts = []
+    for candidate in candidates:
+        lattice_shifts.extend(_translation_cosets(candidate, operations['Gnum'])[1:])
+
+    def local_origin_settings():
+        # Eighth-cell shifts are required by some cubic settings (e.g. SG 201
+        # and 203).  Search them before the more expensive G automorphisms.
+        shifts = [np.zeros(3)] + lattice_shifts
+        for coordinates in product(range(8), repeat=3):
+            if coordinates == (0, 0, 0):
+                continue
+            offset = np.asarray(coordinates, dtype=float) / 8
+            for lattice_shift in shifts:
+                yield base_rotation, base_shift + offset + lattice_shift
+
+    result = try_transforms(local_origin_settings(), 'extra_origin_shift')
+    if result is not None:
+        return result
+
+    if len(candidates) == 1:
+        triclinic = _triclinic_index_two_setting(candidates[0], operations)
+        if triclinic is not None:
+            def aligned_triclinic_settings():
+                transform = triclinic @ base_rotation
+                shift = triclinic @ base_shift
+                for coordinates in product(range(8), repeat=3):
+                    offset = np.asarray(coordinates, dtype=float) / 8
+                    for lattice_shift in [np.zeros(3)] + lattice_shifts:
+                        yield transform, shift + offset + lattice_shift
+
+            result = try_transforms(aligned_triclinic_settings(),
+                                    'triclinic_index_two')
+            if result is not None:
+                return result
+
+    iso_data = find_sg_iso_transform(operations['Gnum'])
+    result = try_transforms(
+        _automorphism_transforms(operations, iso_data, [np.zeros(3)]),
+        'automorphism',
+    )
+    if result is not None:
+        return result
+
+    def with_lattice_shifts(offsets, include_zero=False):
+        shifts = ([np.zeros(3)] if include_zero else []) + lattice_shifts
+        for transform, shift in _automorphism_transforms(operations, iso_data, offsets):
+            for lattice_shift in shifts:
+                yield transform, shift + lattice_shift
+
+    if lattice_shifts:
+        result = try_transforms(with_lattice_shifts([np.zeros(3)]),
+                                'translation_coset')
+        if result is not None:
+            return result
+
+    result = try_transforms(
+        with_lattice_shifts(_quarter_origin_offsets(), include_zero=True),
+        'extra_origin_shift',
+    )
+    if result is not None:
+        return result
+    return finish('no_equivalent_operations', stage='extra_origin_shift')
+
+
+def identity_cell(cell1, cell2, mag_tol=1e-4): 
     cell1_std = std_cell(cell1)
     cell2_std = std_cell(cell2)
     # print(cell1_std)
@@ -536,14 +718,14 @@ def identity_cell(cell1, cell2):
     mag2 = cell2_std[3].copy()
     for cnt, m1 in enumerate(mag1):
         m2 = mag2[cnt]
-        if not identity_vec(m1, m2):
+        if not identity_vec(m1, m2, mag_tol):
             return False
     return True
 
-def checkQ(ss, ssg_dict, dim, shift, transform):
+def checkQ(ss, ssg_dict, dim, shift, transform, translation_tol=1e-4, rotation_tol=1e-3, spin_tol=1e-2):
     def check_rot(rot1, rot2, dim):
         if dim == 1:
-            if abs(det(rot1) - det(rot2)) < 1e-2:
+            if abs(det(rot1) - det(rot2)) < spin_tol:
                 return True
             else:
                 return False
@@ -554,7 +736,7 @@ def checkQ(ss, ssg_dict, dim, shift, transform):
         # else:
         #     return False
         diff_trace = abs(np.trace(rot1) - np.trace(rot2))
-        if diff_trace < 1e-2:
+        if diff_trace < spin_tol:
             return True
         else:
             return False
@@ -591,9 +773,7 @@ def checkQ(ss, ssg_dict, dim, shift, transform):
             for cnt2, rot2 in enumerate(Rot_list):
                 t1 = QTauC[cnt1]
                 t2 = Tau_list[cnt2]
-                mod_t1 = change_tau(t1)
-                mod_t2 = change_tau(t2)
-                if identity_vec(mod_t1, mod_t2) and norm(rot1-rot2) < 1e-3:
+                if same_translation_mod_lattice(t1, t2, translation_tol) and norm(rot1-rot2) < rotation_tol:
                     flag = True
                     spin_rot1 = spin_list[cnt2]
                     spin_rot2 = URot_std[cnt1]
@@ -621,10 +801,10 @@ def checkQ(ss, ssg_dict, dim, shift, transform):
         return True
     return False
 
-def checkH(ss,ssg_dict, shift, transform):
+def checkH(ss,ssg_dict, shift, transform, translation_tol=1e-4, rotation_tol=1e-3):
     gid = ssg_dict['Gnum']
-    HRotC_std = ss['HRotC']
-    HTauC_std = ss['HTauC']
+    HRotC_std = list(ss['HRotC'])
+    HTauC_std = list(ss['HTauC'])
     # trnasform = ssg_dict['transformation_matrix']
     tau_col = ss['superCell']
     t1 = np.array([tau_col[0][0], tau_col[1][0], tau_col[2][0]]) 
@@ -659,9 +839,7 @@ def checkH(ss,ssg_dict, shift, transform):
         for cnt2, rot2 in enumerate(Rot_list):
             t1 = HTauC[cnt1]
             t2 = Tau_list[cnt2]
-            mod_t1 = change_tau(t1)
-            mod_t2 = change_tau(t2)
-            if identity_vec(mod_t1, mod_t2) and norm(rot1-rot2) < 1e-3:
+            if same_translation_mod_lattice(t1, t2, translation_tol) and norm(rot1-rot2) < rotation_tol:
                 flag = True
         if not flag:
             # print(Rot_list, Tau_list, spin_list)
@@ -681,34 +859,25 @@ def unique_matrix(matrix_list, tol=1e-3):
             unique_list.append(mat)
     return unique_list
 
-def twoD2threeD(cell):
-    lattice = cell[0].copy()
-    position = cell[1].copy()
-    numbers = cell[2].copy()
-    mag = cell[3].copy()
-    nonzero = []
-    for m in mag:
-        if not identity_vec(m, [0, 0, 0]):
-            nonzero.append(m)
-    nonzero = unique_matrix(nonzero)
-    assert np.size(nonzero, axis=0) > 1
-    for i in nonzero[1:]: 
-        p_vec = np.cross(nonzero[0], i)
-        if not identity_vec(p_vec, [0, 0, 0]):
-            p_vec = p_vec * norm(i) / norm(p_vec)
-            break
-    mag_new = []
-    for m in mag:
-        mag_new.append(m + p_vec)
-    cell_new = (lattice, position, numbers, mag_new)
-    # print(p_vec)
-    return cell_new
+def twoD2threeD(cell, mag_tol=1e-4):
+    """Lift the spin plane along its SVD normal, avoiding tiny cross products."""
+    if findDimension(cell, mag_tol) != 2:
+        raise ValueError('twoD2threeD requires a planar magnetic structure')
+    mag = np.asarray(cell[3], dtype=float)
+    _, _, axes = np.linalg.svd(mag, full_matrices=False)
+    normal = np.cross(axes[0], axes[1]) * np.max(norm(mag, axis=1))
+    return (cell[0].copy(), cell[1].copy(), cell[2].copy(), mag + normal)
 
-def findAllOp(cell, tol):
-    dim = findDimension(cell)
+
+def findAllOp(cell, tol, mag_tol=1e-4):
+    tol = _positive_tolerance(tol, 'tol')
+    mag_tol = _positive_tolerance(mag_tol, 'mag_tol')
+    dim = findDimension(cell, mag_tol)
+    if dim == 0:
+        raise ValueError('Nonmagnetic structure: use the ordinary space group')
     # id dim = 2, transfer it into a 3d which will maintain all the operation, but still .P
     if dim == 2:
-        cell = twoD2threeD(cell)
+        cell = twoD2threeD(cell, mag_tol)
     lattice = cell[0].copy()
     position = cell[1].copy()
     numbers = cell[2].copy()
@@ -716,7 +885,7 @@ def findAllOp(cell, tol):
     out_spin = []
     out_rot = []
     out_tran = []
-    spinOp = findQ(cell)
+    spinOp = findQ(cell, mag_tol)
     latticeOp = findG(cell, tol)
     non_mag_G = latticeOp[0]
     rot = latticeOp[1]
@@ -736,7 +905,7 @@ def findAllOp(cell, tol):
             # print(t)
             # print(spin_rot)
             cell_new = (lattice, pos_new, numbers, mag_new)
-            if identity_cell(cell, cell_new):
+            if identity_cell(cell, cell_new, mag_tol):
                 out_spin.append(spin_rot)
                 out_rot.append(r)
                 out_tran.append(t)
@@ -744,7 +913,7 @@ def findAllOp(cell, tol):
     # print(out_spin)
     # print(out_rot)
     # print(out_tran)
-    fH = findH(cell, 1e-2)
+    fH = findH(cell, 1e-2, mag_tol)
     # fH = findH_v2(out_spin, out_rot, out_tran, cell)
     Hnum = fH[0]
     Hrot = fH[1]
@@ -788,14 +957,18 @@ def findAllOp(cell, tol):
         spin_label = findQlabel(out_spin)
         # print(spin_label)
 
-    return {'spin': out_spin, 'It': It, 'Hnum': Hnum, 'Ik': Ik, 'Gnum': Gnum, 'QLabel': schoenflies_to_hm(spin_label), 'RotC': out_rot,
+    return {'dimension': dim, 'mag_tol': mag_tol, 'symprec': tol, 'spin': out_spin, 'It': It, 'Hnum': Hnum, 'Ik': Ik, 'Gnum': Gnum, 'QLabel': schoenflies_to_hm(spin_label), 'RotC': out_rot,
             'TauC': out_tran, 'spin': out_spin, 'transformation_matrix': transform, 'original_shift': shift, 'HRotC': Hrot, 'HTauC': Htran}
 
-def findAllOp_v2(cell, tol):
-    dim = findDimension(cell)
+def findAllOp_v2(cell, tol, mag_tol=1e-4):
+    tol = _positive_tolerance(tol, 'tol')
+    mag_tol = _positive_tolerance(mag_tol, 'mag_tol')
+    dim = findDimension(cell, mag_tol)
+    if dim == 0:
+        raise ValueError('Nonmagnetic structure: use the ordinary space group')
     # id dim = 2, transfer it into a 3d which will maintain all the operation, but still .P
     if dim == 2:
-        cell = twoD2threeD(cell)
+        cell = twoD2threeD(cell, mag_tol)
     lattice = cell[0].copy()
     position = cell[1].copy()
     numbers = cell[2].copy()
@@ -803,7 +976,7 @@ def findAllOp_v2(cell, tol):
     out_spin = []
     out_rot = []
     out_tran = []
-    spinOp = findQ(cell)
+    spinOp = findQ(cell, mag_tol)
     latticeOp = findG(cell, tol)
     non_mag_G = latticeOp[0]
     rot = latticeOp[1]
@@ -823,7 +996,7 @@ def findAllOp_v2(cell, tol):
             # print(t)
             # print(spin_rot)
             cell_new = (lattice, pos_new, numbers, mag_new)
-            if identity_cell(cell, cell_new):
+            if identity_cell(cell, cell_new, mag_tol):
                 out_spin.append(spin_rot)
                 out_rot.append(r)
                 out_tran.append(t)
@@ -875,7 +1048,7 @@ def findAllOp_v2(cell, tol):
         spin_label = findQlabel(out_spin)
         # print(spin_label)
 
-    return {'spin': out_spin, 'It': It, 'Hnum': Hnum, 'Ik': Ik, 'Gnum': Gnum, 'QLabel': schoenflies_to_hm(spin_label), 'RotC': out_rot,
+    return {'dimension': dim, 'mag_tol': mag_tol, 'symprec': tol, 'spin': out_spin, 'It': It, 'Hnum': Hnum, 'Ik': Ik, 'Gnum': Gnum, 'QLabel': schoenflies_to_hm(spin_label), 'RotC': out_rot,
             'TauC': out_tran, 'spin': out_spin, 'transformation_matrix': transform, 'original_shift': shift, 'HRotC': Hrot, 'HTauC': Htran}
 
 
@@ -1089,7 +1262,17 @@ def print_tau(mat, wfile=None, print1=True):
     else:
         return strg
 
-def main():
+def main(argv=None):
+    import argparse
+    parser = argparse.ArgumentParser(description='Identify a spin space group from POSCAR or identifySSG.mcif')
+    parser.add_argument('--symprec', type=float, default=1e-4, help='atomic-position tolerance in lattice length units')
+    parser.add_argument('--mag-tol', type=float, default=1e-4, help='absolute moment tolerance in input moment units')
+    parser.add_argument('--translation-tol', type=float, default=1e-4, help='fractional-translation matching tolerance')
+    parser.add_argument('--rotation-tol', type=float, default=1e-3, help='spatial-matrix matching tolerance')
+    parser.add_argument('--spin-tol', type=float, default=1e-2, help='spin character/determinant matching tolerance')
+    args = parser.parse_args(argv)
+    for name, value in vars(args).items():
+        _positive_tolerance(value, name)
     warnings.filterwarnings('ignore')
     if os.path.exists('POSCAR'):
         
@@ -1121,10 +1304,10 @@ def main():
     position = cell[1].copy()
     numbers = cell[2].copy()
     mag = cell[3].copy()
-    if all(norm(m1) < 1e-4 for m1 in mag):
+    if findDimension(cell, args.mag_tol) == 0:
         print('It is a non-magnetic structure')
         cell_nonmag = (lattice, position, numbers)
-        nonmag_sym = get_symmetry_dataset(cell_nonmag)
+        nonmag_sym = get_symmetry_dataset(cell_nonmag, symprec=args.symprec)
         print('Operations:')
         print('space rotations:')
         print_matlist(nonmag_sym['rotations'])
@@ -1135,7 +1318,7 @@ def main():
         # print(operations)
         print('The SG number:',nonmag_sym['number'],'(',nonmag_sym['international'],')')
     else:
-        operations = findAllOp(cell, tol = 1e-4)
+        operations = findAllOp(cell, tol=args.symprec, mag_tol=args.mag_tol)
         print('Operations:')
         print('spin rotations:')
         print_matlist(operations['spin'])
@@ -1147,7 +1330,9 @@ def main():
         print_taulist(operations['TauC'])
         print('==================')
         # print(operations)
-        ssgnum = search4ssg(cell, ssg_list, tol = 1e-4)
+        ssgnum = search4ssg(cell, ssg_list, tol=args.symprec, operations=operations,
+                            mag_tol=args.mag_tol, translation_tol=args.translation_tol,
+                            rotation_tol=args.rotation_tol, spin_tol=args.spin_tol)
         print('The SSG number:')
         print(ssgnum)
         print('More information about this group can be found at')
